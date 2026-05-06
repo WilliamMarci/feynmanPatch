@@ -1,7 +1,7 @@
 # feynmanPatch/ftdl/sema.py
 
 from .ast import (
-    Program, ImportStmt, ParticleDecl, ParticleDef,
+    Program, Diagram, ImportStmt, ParticleDecl, ParticleDef,
     VertexDecl, TypeRef, LStmt, Port, Instance,
     ProcessStmt, MultiProcessStmt, CallExpr,
 )
@@ -39,19 +39,22 @@ class SemanticAnalyzer(object):
         return self
 
     def _pass_declare(self):
-        for item in self.ast.items:
-            if isinstance(item, ImportStmt):
-                self.imports.append(item)
-            elif isinstance(item, ParticleDecl):
-                if item.name in self.symbols:
-                    self._error("Duplicate particle %s" % item.name, item)
-                self.symbols[item.name] = SymbolInfo(item, "particle")
-            elif isinstance(item, VertexDecl):
-                if item.name in self.symbols:
-                    self._error("Duplicate vertex %s" % item.name, item)
-                info = SymbolInfo(item, "vertex")
-                self.symbols[item.name] = info
-                self._classify_vertex(item)
+        for item in self.ast.decls:
+            self._declare_item(item)
+
+    def _declare_item(self, item):
+        if isinstance(item, ImportStmt):
+            self.imports.append(item)
+        elif isinstance(item, ParticleDecl):
+            if item.name in self.symbols:
+                return
+            self.symbols[item.name] = SymbolInfo(item, "particle")
+        elif isinstance(item, VertexDecl):
+            if item.name in self.symbols:
+                return
+            info = SymbolInfo(item, "vertex")
+            self.symbols[item.name] = info
+            self._classify_vertex(item)
 
     def _classify_vertex(self, vertex):
         for deco in vertex.decorators:
@@ -70,13 +73,14 @@ class SemanticAnalyzer(object):
         self.core_vertices.append(vertex)
 
     def _pass_resolve(self):
-        for item in self.ast.items:
-            if isinstance(item, ProcessStmt):
-                self._resolve_process(item)
-            elif isinstance(item, MultiProcessStmt):
-                self._resolve_multi_process(item)
-            elif isinstance(item, CallExpr):
-                self._resolve_call(item)
+        for diag in self.ast.diagrams:
+            for stmt in diag.stmts:
+                if isinstance(stmt, ProcessStmt):
+                    self._resolve_process(stmt)
+                elif isinstance(stmt, MultiProcessStmt):
+                    self._resolve_multi_process(stmt)
+                elif isinstance(stmt, CallExpr):
+                    self._resolve_call(stmt)
 
     def _resolve_process(self, stmt):
         seq = self._extract_particle_seq(stmt)

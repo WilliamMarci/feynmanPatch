@@ -4,6 +4,7 @@ import sys
 import os
 
 from .parser import parse_source
+from .ast import ImportStmt, Program, Diagram
 from .sema import SemanticAnalyzer
 from .llvm_gen import generate_ir
 from .ir_builder import IRBuilder
@@ -13,21 +14,80 @@ from .layout_engine import LayoutEngine
 
 class FTDLCompiler(object):
 
-    def __init__(self):
+    def __init__(self, search_paths=None):
         self.source = ""
         self.ast = None
         self.sema = None
         self.ir = ""
         self.diagrams = []
+        self.search_paths = search_paths or []
+        self._loaded_imports = set()
+
+    def _resolve_import(self, name):
+        for sp in self.search_paths:
+            path = os.path.join(sp, name + ".ftdl")
+            if os.path.isfile(path):
+                return path
+        if hasattr(self, "_current_file"):
+            dirname = os.path.dirname(self._current_file)
+            path = os.path.join(dirname, name + ".ftdl")
+            if os.path.isfile(path):
+                return path
+        path = name + ".ftdl"
+        if os.path.isfile(path):
+            return os.path.abspath(path)
+        return None
+
+    def _load_imports(self, ast, imported_set=None):
+        if imported_set is None:
+            imported_set = set()
+        merged_decls = []
+        merged_diags = []
+        for item in ast.decls:
+            if isinstance(item, ImportStmt):
+                if item.name in imported_set:
+                    continue
+                path = self._resolve_import(item.name)
+                if path is None:
+                    continue
+                imported_set.add(item.name)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        imp_source = f.read()
+                    imp_ast = parse_source(imp_source)
+                    d, diags = self._load_imports(imp_ast, imported_set)
+                    merged_decls.extend(d)
+                    merged_diags.extend(diags)
+                except Exception:
+                    pass
+            else:
+                merged_decls.append(item)
+        merged_diags.extend(ast.diagrams)
+        return merged_decls, merged_diags
 
     def compile_string(self, source, filename="<string>"):
         self.source = source
+        self._current_file = filename
+        self._loaded_imports = set()
         try:
-            self.ast = parse_source(source)
+            raw_ast = parse_source(source)
         except Exception as e:
             return {
                 "success": False,
                 "error": "Parse error: %s" % str(e)
+            }
+        if os.path.isfile(filename):
+            self.search_paths.insert(0, os.path.dirname(os.path.abspath(filename)))
+        else:
+            self.search_paths.insert(0, ".")
+
+        try:
+            decls, diagrams = self._load_imports(raw_ast)
+            self.ast = Program(decls, diagrams)
+        except Exception as e:
+            return {
+                "success": False,
+                "error": "Import error: %s" % str(e)
             }
         try:
             self.sema = SemanticAnalyzer(self.ast)
@@ -70,6 +130,9 @@ class FTDLCompiler(object):
     def compile_file(self, path):
         if not os.path.isfile(path):
             return {"success": False, "error": "File not found: %s" % path}
+        path = os.path.abspath(path)
+        if not self.search_paths:
+            self.search_paths.append(os.path.dirname(path))
         with open(path, "r", encoding="utf-8") as f:
             source = f.read()
         return self.compile_string(source, filename=path)

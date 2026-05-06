@@ -2,13 +2,13 @@
 
 from .tokens import (
     TOK_EOF, TOK_ID, TOK_STRING, TOK_NUMBER,
-    TOK_COMMA, TOK_EQUALS, TOK_GT,
+    TOK_COMMA, TOK_EQUALS, TOK_GT, TOK_SEMI,
     TOK_LBRACE, TOK_RBRACE, TOK_LBRACKET, TOK_RBRACKET,
     TOK_LPAREN, TOK_RPAREN, TOK_AT,
     TOK_IMPORT, TOK_PARTICLE, TOK_VERTEX,
 )
 from .ast import (
-    Program, ImportStmt, ParticleDecl, ParticleDef,
+    Program, Diagram, ImportStmt, ParticleDecl, ParticleDef,
     VertexDecl, TypeRef, LStmt, Port, Instance,
     ProcessStmt, MultiProcessStmt, CallExpr,
 )
@@ -52,11 +52,9 @@ class Parser(object):
             return self._advance()
         return None
 
-    def _is_at_type(self):
-        return self._check(TOK_IMPORT) or self._check(TOK_PARTICLE) or self._check(TOK_VERTEX)
-
-    def _is_at_item_start(self):
-        return self._check(TOK_AT) or self._is_at_type() or self._check(TOK_ID) or self._check(TOK_EOF)
+    def _is_decl_start(self):
+        return (self._check(TOK_IMPORT) or self._check(TOK_PARTICLE)
+                or self._check(TOK_VERTEX) or self._check(TOK_AT))
 
     def _is_at_deco(self):
         return self._check(TOK_AT)
@@ -65,19 +63,29 @@ class Parser(object):
         return self._check(TOK_LBRACKET) or self._check(TOK_ID)
 
     def parse(self):
-        items = self._parse_items()
-        return Program(items)
+        decls = self._parse_decls()
+        diagrams = self._parse_diagrams()
+        return Program(decls, diagrams)
 
-    def _parse_items(self):
-        items = []
-        items.append(self._parse_item())
-        while self._match_if(TOK_COMMA):
-            if self._check(TOK_EOF):
+    def _parse_decls(self):
+        decls = []
+        while self._is_decl_start():
+            if self._check(TOK_COMMA):
+                self._advance()
+                continue
+            if self._check(TOK_SEMI) or self._check(TOK_EOF):
                 break
-            items.append(self._parse_item())
-        return items
+            d = self._parse_decl_item()
+            if d is None:
+                break
+            decls.append(d)
+            if self._check(TOK_COMMA):
+                self._advance()
+            elif self._check(TOK_SEMI) or self._check(TOK_EOF):
+                break
+        return decls
 
-    def _parse_item(self):
+    def _parse_decl_item(self):
         decos = self._parse_decos()
         tok = self._peek()
         if tok.type == TOK_PARTICLE:
@@ -88,14 +96,38 @@ class Parser(object):
             if decos:
                 raise ParseError("Decorators not allowed on import at L%d:%d" % (tok.line, tok.col))
             return self._parse_import()
-        elif tok.type == TOK_ID:
-            if decos:
-                raise ParseError("Decorators not allowed on statement at L%d:%d" % (tok.line, tok.col))
-            return self._parse_stmt()
-        elif tok.type == TOK_EOF:
-            return None
         else:
-            raise ParseError("Unexpected token %s at L%d:%d" % (tok.type, tok.line, tok.col))
+            return None
+
+    def _parse_diagrams(self):
+        diagrams = []
+        if self._match_if(TOK_COMMA):
+            pass
+        while not self._check(TOK_EOF):
+            diag = self._parse_diagram()
+            if diag is None or not diag.stmts:
+                break
+            diagrams.append(diag)
+            if self._check(TOK_SEMI):
+                self._advance()
+                while self._match_if(TOK_COMMA):
+                    pass
+            elif self._check(TOK_COMMA):
+                self._advance()
+            else:
+                break
+        return diagrams
+
+    def _parse_diagram(self):
+        stmts = []
+        stmt = self._parse_stmt()
+        if stmt:
+            stmts.append(stmt)
+        while self._match_if(TOK_COMMA):
+            stmt = self._parse_stmt()
+            if stmt:
+                stmts.append(stmt)
+        return Diagram(stmts)
 
     def _parse_import(self):
         tok = self._match(TOK_IMPORT)
@@ -150,9 +182,7 @@ class Parser(object):
         self._match(TOK_LBRACKET)
         sig = self._parse_signature()
         self._match(TOK_RBRACKET)
-
         decos.extend(self._parse_decos())
-
         body = None
         if self._match_if(TOK_EQUALS):
             self._match(TOK_LBRACE)
@@ -219,22 +249,22 @@ class Parser(object):
             return self._match(TOK_ID).lexeme
 
     def _parse_stmt(self):
-        saved = self.pos
-        insts_left = self._parse_inst_list()
-        if not self._match_if(TOK_GT):
+        if self._check(TOK_ID) and self._is_call_lookahead():
+            return self._parse_call()
+        if self._check(TOK_ID) and self._is_instance_next():
+            saved = self.pos
+            insts_left = self._parse_inst_list()
+            if self._match_if(TOK_GT):
+                if self._check(TOK_ID) and self._is_call_lookahead():
+                    call = self._parse_call()
+                    if self._match_if(TOK_GT):
+                        insts_right = self._parse_inst_list()
+                        return MultiProcessStmt(insts_left, call, insts_right)
+                insts_right = self._parse_inst_list()
+                return ProcessStmt(insts_left, insts_right)
             self.pos = saved
             return self._parse_call()
-
-        if self._check(TOK_ID) and self._is_call_lookahead():
-            call = self._parse_call()
-            if self._match_if(TOK_GT):
-                insts_right = self._parse_inst_list()
-                return MultiProcessStmt(insts_left, call, insts_right)
-            insts_right = self._parse_inst_list()
-            return ProcessStmt(insts_left + [call], insts_right)
-
-        insts_right = self._parse_inst_list()
-        return ProcessStmt(insts_left, insts_right)
+        return None
 
     def _parse_inst_list(self):
         insts = []

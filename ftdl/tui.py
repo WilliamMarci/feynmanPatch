@@ -23,12 +23,19 @@ class FTDLTUI(object):
         self._message = ""
         self._message_type = ""
         self._mode = "editor"
+        self._vim_mode = "normal"
         self._ir_text = ""
         self._diag_text = ""
         self._diagrams = []
         self._json_diagrams = []
         self._rrows = 24
         self._rcols = 80
+        self._status_line = ""
+        self._cmd_line = ""
+        self._cmd_mode = False
+        self._yank_buffer = ""
+        self._search_pattern = ""
+        self._search_highlight = set()
 
     def main(self):
         if not _CURSES or not sys.stdout.isatty():
@@ -65,6 +72,8 @@ class FTDLTUI(object):
         curses.init_pair(4, curses.COLOR_YELLOW, -1)
         curses.init_pair(5, curses.COLOR_WHITE, -1)
         curses.init_pair(6, curses.COLOR_BLACK, curses.COLOR_CYAN)
+        curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_WHITE)
+        curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_YELLOW)
 
         self._rrows, self._rcols = stdscr.getmaxyx()
         stdscr.nodelay(0)
@@ -79,68 +88,317 @@ class FTDLTUI(object):
 
         self._run_loop()
 
+    def _get_lines(self):
+        if not self._file_content:
+            return [""]
+        return self._file_content.split("\n")
+
+    def _set_content(self, lines):
+        self._file_content = "\n".join(lines)
+
     def _run_loop(self):
         while True:
             self._draw()
             ch = self._stdscr.getch()
-            if self._mode == "editor":
-                if not self._handle_editor_key(ch):
-                    break
-            else:
-                if not self._handle_viewer_key(ch):
-                    break
+            if not self._dispatch(ch):
+                break
 
-    def _handle_editor_key(self, ch):
-        lines = self._file_content.split("\n") if self._file_content else [""]
-        if ch == curses.KEY_F1:
-            self._mode = "editor"
-        elif ch == curses.KEY_F2:
-            self._mode = "ir_viewer"
-        elif ch == curses.KEY_F3:
-            self._mode = "diag_viewer"
-        elif ch == curses.KEY_F4:
-            self._mode = "json_viewer"
-        elif ch == curses.KEY_F5:
-            self._do_compile()
-        elif ch == curses.KEY_F6:
-            if self._filename:
-                self._do_export("json")
-        elif ch == curses.KEY_F7:
-            self._do_export("tex")
-        elif ch == curses.KEY_F8:
-            self._do_export("svg")
-        elif ch == curses.KEY_F9:
-            self._do_export("pdf")
-        elif ch in (curses.KEY_F10, 27):
-            return False
-        elif ch == curses.KEY_UP:
-            if self._cursor_row > 0:
-                self._cursor_row -= 1
-        elif ch == curses.KEY_DOWN:
-            if self._cursor_row < len(lines) - 1:
-                self._cursor_row += 1
-        elif ch == curses.KEY_LEFT:
+    def _dispatch(self, ch):
+        if self._cmd_mode:
+            return self._handle_cmd(ch)
+
+        if self._mode == "editor":
+            if self._vim_mode == "normal":
+                return self._handle_normal(ch)
+            elif self._vim_mode == "insert":
+                return self._handle_insert(ch)
+        else:
+            return self._handle_viewer_key(ch)
+
+    # ---- command line mode ----
+
+    def _handle_cmd(self, ch):
+        if ch == 27:
+            self._cmd_mode = False
+            self._cmd_line = ""
+            return True
+        if ch == 10:
+            self._execute_cmd()
+            self._cmd_mode = False
+            self._cmd_line = ""
+            return True
+        if ch in (curses.KEY_BACKSPACE, 127):
+            if self._cmd_line:
+                self._cmd_line = self._cmd_line[:-1]
+            return True
+        if 32 <= ch <= 126:
+            self._cmd_line += chr(ch)
+            return True
+        return True
+
+    def _execute_cmd(self):
+        cmd = self._cmd_line.strip()
+        if not cmd:
+            return
+        if cmd == "w":
+            self._do_save()
+        elif cmd == "q":
+            self._do_save()
+            sys.exit(0)
+        elif cmd == "wq":
+            self._do_save()
+            sys.exit(0)
+        elif cmd.startswith("e "):
+            path = cmd[2:].strip()
+            if os.path.isfile(path):
+                self._filename = path
+                with open(path, "r", encoding="utf-8") as f:
+                    self._file_content = f.read()
+                self._cursor_row = 0
+                self._cursor_col = 0
+                self._msg("Opened %s" % path, "success")
+            else:
+                self._msg("File not found: %s" % path, "error")
+        else:
+            self._msg("Unknown command: %s" % cmd, "error")
+
+    def _msg(self, text, mtype="info"):
+        self._message = text
+        self._message_type = mtype
+
+    # ---- normal mode ----
+
+    def _handle_normal(self, ch):
+        if self._cmd_mode:
+            return True
+
+        if ch == ord('i'):
+            self._vim_mode = "insert"
+            return True
+        if ch == ord('a'):
+            lines = self._get_lines()
+            if self._cursor_col < len(lines[self._cursor_row]):
+                self._cursor_col += 1
+            self._vim_mode = "insert"
+            return True
+        if ch == ord('I'):
+            self._cursor_col = 0
+            self._vim_mode = "insert"
+            return True
+        if ch == ord('A'):
+            lines = self._get_lines()
+            self._cursor_col = len(lines[self._cursor_row])
+            self._vim_mode = "insert"
+            return True
+        if ch == ord('o'):
+            lines = self._get_lines()
+            lines.insert(self._cursor_row + 1, "")
+            self._set_content(lines)
+            self._cursor_row += 1
+            self._cursor_col = 0
+            self._vim_mode = "insert"
+            return True
+        if ch == ord('O'):
+            lines = self._get_lines()
+            lines.insert(self._cursor_row, "")
+            self._set_content(lines)
+            self._cursor_col = 0
+            self._vim_mode = "insert"
+            return True
+
+        if ch == ord('h'):
             if self._cursor_col > 0:
                 self._cursor_col -= 1
-        elif ch == curses.KEY_RIGHT:
-            cur_line = lines[self._cursor_row] if self._cursor_row < len(lines) else ""
-            if self._cursor_col < len(cur_line):
+            return True
+        if ch == ord('l'):
+            lines = self._get_lines()
+            if self._cursor_col < len(lines[self._cursor_row]):
                 self._cursor_col += 1
-        elif ch in (curses.KEY_BACKSPACE, 127):
+            return True
+        if ch == ord('j') or ch == curses.KEY_DOWN:
+            lines = self._get_lines()
+            if self._cursor_row < len(lines) - 1:
+                self._cursor_row += 1
+            self._clamp_col(lines)
+            return True
+        if ch == ord('k') or ch == curses.KEY_UP:
+            if self._cursor_row > 0:
+                self._cursor_row -= 1
+            self._clamp_col(self._get_lines())
+            return True
+
+        if ch == ord('w'):
+            self._move_word(1)
+            return True
+        if ch == ord('b'):
+            self._move_word(-1)
+            return True
+        if ch == ord('0'):
+            self._cursor_col = 0
+            return True
+        if ch == ord('$'):
+            lines = self._get_lines()
+            self._cursor_col = max(0, len(lines[self._cursor_row]) - 1)
+            return True
+        if ch == ord('g'):
+            ch2 = self._stdscr.getch()
+            if ch2 == ord('g'):
+                self._cursor_row = 0
+                self._cursor_col = 0
+            return True
+        if ch == ord('G'):
+            lines = self._get_lines()
+            self._cursor_row = max(0, len(lines) - 1)
+            self._cursor_col = 0
+            return True
+
+        if ch == ord('x'):
+            lines = self._get_lines()
+            line = lines[self._cursor_row]
+            if self._cursor_col < len(line):
+                lines[self._cursor_row] = line[:self._cursor_col] + line[self._cursor_col + 1:]
+                self._set_content(lines)
+            return True
+        if ch == ord('d'):
+            ch2 = self._stdscr.getch()
+            if ch2 == ord('d'):
+                lines = self._get_lines()
+                if len(lines) > 1:
+                    self._yank_buffer = lines.pop(self._cursor_row)
+                    if self._cursor_row >= len(lines):
+                        self._cursor_row = len(lines) - 1
+                    self._set_content(lines)
+                    self._clamp_col(lines)
+            return True
+        if ch == ord('y'):
+            ch2 = self._stdscr.getch()
+            if ch2 == ord('y'):
+                lines = self._get_lines()
+                self._yank_buffer = lines[self._cursor_row]
+            return True
+        if ch == ord('p'):
+            if self._yank_buffer:
+                lines = self._get_lines()
+                lines.insert(self._cursor_row + 1, self._yank_buffer)
+                self._cursor_row += 1
+                self._cursor_col = 0
+                self._set_content(lines)
+            return True
+
+        if ch == ord('/'):
+            self._cmd_mode = True
+            self._cmd_line = "/"
+            return True
+
+        if ch == 27:
+            self._search_pattern = ""
+            self._search_highlight = set()
+            return True
+
+        if ch == curses.KEY_F1:
+            self._mode = "editor"
+            self._vim_mode = "normal"
+            return True
+        if ch == curses.KEY_F2:
+            self._mode = "ir_viewer"
+            return True
+        if ch == curses.KEY_F3:
+            self._mode = "diag_viewer"
+            return True
+        if ch == curses.KEY_F4:
+            self._mode = "json_viewer"
+            return True
+        if ch == curses.KEY_F5:
+            self._do_compile()
+            return True
+        if ch == curses.KEY_F6:
+            self._do_export("json")
+            return True
+        if ch == curses.KEY_F7:
+            self._do_export("tex")
+            return True
+        if ch == curses.KEY_F8:
+            self._do_export("svg")
+            return True
+        if ch == curses.KEY_F9:
+            self._do_export("pdf")
+            return True
+        if ch == curses.KEY_F10:
+            return False
+
+        return True
+
+    def _clamp_col(self, lines):
+        if self._cursor_row < len(lines):
+            if self._cursor_col > len(lines[self._cursor_row]):
+                self._cursor_col = max(0, len(lines[self._cursor_row]))
+
+    def _move_word(self, direction):
+        lines = self._get_lines()
+        row = self._cursor_row
+        col = self._cursor_col
+        if direction > 0:
+            line = lines[row]
+            while col < len(line) and line[col].isalnum():
+                col += 1
+            while col < len(line) and not line[col].isalnum():
+                col += 1
+            self._cursor_col = col
+        else:
+            if col == 0:
+                if row > 0:
+                    self._cursor_row = row - 1
+                    self._cursor_col = len(lines[self._cursor_row])
+                return
+            col -= 1
+            line = lines[row]
+            while col > 0 and not line[col].isalnum():
+                col -= 1
+            while col > 0 and line[col - 1].isalnum():
+                col -= 1
+            self._cursor_col = col
+
+    # ---- insert mode ----
+
+    def _handle_insert(self, ch):
+        if ch == 27:
+            self._vim_mode = "normal"
+            return True
+
+        if ch == curses.KEY_F1:
+            self._vim_mode = "normal"
+            self._mode = "editor"
+            return True
+        if ch == curses.KEY_F10:
+            return False
+
+        lines = self._get_lines()
+        if ch in (curses.KEY_BACKSPACE, 127):
             self._edit_backspace(lines)
         elif ch == curses.KEY_DC:
             self._edit_delete(lines)
         elif ch == 10:
             self._edit_newline(lines)
+        elif ch == curses.KEY_UP:
+            if self._cursor_row > 0:
+                self._cursor_row -= 1
+            self._clamp_col(lines)
+        elif ch == curses.KEY_DOWN:
+            if self._cursor_row < len(lines) - 1:
+                self._cursor_row += 1
+            self._clamp_col(lines)
+        elif ch == curses.KEY_LEFT:
+            if self._cursor_col > 0:
+                self._cursor_col -= 1
+        elif ch == curses.KEY_RIGHT:
+            if self._cursor_col < len(lines[self._cursor_row]):
+                self._cursor_col += 1
+        elif ch == curses.KEY_HOME:
+            self._cursor_col = 0
+        elif ch == curses.KEY_END:
+            self._cursor_col = len(lines[self._cursor_row])
         elif 32 <= ch <= 126:
             self._edit_insert(lines, chr(ch))
-        return True
-
-    def _handle_viewer_key(self, ch):
-        if ch == curses.KEY_F1:
-            self._mode = "editor"
-        elif ch in (curses.KEY_F10, 27):
-            return False
         return True
 
     def _edit_backspace(self, lines):
@@ -153,7 +411,7 @@ class FTDLTUI(object):
             self._cursor_row -= 1
             self._cursor_col = len(lines[self._cursor_row])
             lines[self._cursor_row] += current
-        self._file_content = "\n".join(lines)
+        self._set_content(lines)
 
     def _edit_delete(self, lines):
         if self._cursor_row < len(lines):
@@ -163,7 +421,7 @@ class FTDLTUI(object):
             elif self._cursor_row + 1 < len(lines):
                 nxt = lines.pop(self._cursor_row + 1)
                 lines[self._cursor_row] += nxt
-        self._file_content = "\n".join(lines)
+        self._set_content(lines)
 
     def _edit_newline(self, lines):
         while len(lines) <= self._cursor_row:
@@ -173,7 +431,7 @@ class FTDLTUI(object):
         lines.insert(self._cursor_row + 1, line[self._cursor_col:])
         self._cursor_row += 1
         self._cursor_col = 0
-        self._file_content = "\n".join(lines)
+        self._set_content(lines)
 
     def _edit_insert(self, lines, ch):
         while len(lines) <= self._cursor_row:
@@ -181,124 +439,116 @@ class FTDLTUI(object):
         line = lines[self._cursor_row]
         lines[self._cursor_row] = line[:self._cursor_col] + ch + line[self._cursor_col:]
         self._cursor_col += 1
-        self._file_content = "\n".join(lines)
+        self._set_content(lines)
+
+    # ---- viewer mode ----
+
+    def _handle_viewer_key(self, ch):
+        if ch == curses.KEY_F1:
+            self._mode = "editor"
+            self._vim_mode = "normal"
+            return True
+        if ch in (curses.KEY_F10, 27):
+            return False
+        return True
+
+    # ---- compile / export ----
 
     def _do_compile(self):
         from .compiler import FTDLCompiler
         compiler = FTDLCompiler()
         result = compiler.compile_string(self._file_content, filename=self._filename)
         if result["success"]:
-            self._message = "Compilation successful!"
-            self._message_type = "success"
+            self._msg("Compilation OK (%d diagrams)" % len(result.get("diagrams", [])), "success")
             self._ir_text = result.get("ir", "")
             self._diagrams = result.get("diagrams", [])
             self._json_diagrams = compiler.export_json(self._diagrams)
             diags = result.get("diagnostics", [])
             self._diag_text = "\n".join(diags) if diags else "(no warnings)"
-
             if self._json_diagrams:
-                self._diag_text += "\n\n%d diagram(s) built\n" % len(self._json_diagrams)
+                self._diag_text += "\n\n%d diagram(s) built" % len(self._json_diagrams)
         else:
-            self._message = "Error: %s" % result.get("error", "unknown")
-            self._message_type = "error"
+            self._msg("Error: %s" % result.get("error", "unknown"), "error")
             self._diag_text = result.get("error", "")
             self._json_diagrams = []
             self._diagrams = []
 
     def _do_export(self, fmt):
-        if not self._filename:
-            self._message = "No filename set. Save first (F5 then F6)."
-            self._message_type = "error"
-            return
         if not self._json_diagrams:
-            self._message = "No diagrams to export. Compile first (F5)."
-            self._message_type = "error"
+            self._msg("No diagrams. Compile first (F5).", "error")
             return
-
+        base = os.path.splitext(self._filename)[0] if self._filename else "/tmp/ftdl_export"
         from .compiler import FTDLCompiler
         compiler = FTDLCompiler()
-        base = os.path.splitext(self._filename)[0]
-
         try:
             if fmt == "json":
                 for i, d in enumerate(self._json_diagrams):
-                    jpath = "%s_%04d.json" % (base, i + 1)
-                    with open(jpath, "w", encoding="utf-8") as f:
+                    with open("%s_%04d.json" % (base, i + 1), "w", encoding="utf-8") as f:
                         json.dump(d, f, indent=2, sort_keys=False)
-                self._message = "Exported %d JSON(s)" % len(self._json_diagrams)
-                self._message_type = "success"
-
+                self._msg("Exported %d JSON(s)" % len(self._json_diagrams), "success")
             elif fmt == "tex":
                 for i, d in enumerate(self._json_diagrams):
                     tex = compiler.export_tex(d)
-                    tpath = "%s_%04d.tex" % (base, i + 1)
-                    with open(tpath, "w", encoding="utf-8") as f:
+                    with open("%s_%04d.tex" % (base, i + 1), "w", encoding="utf-8") as f:
                         f.write(tex)
-                self._message = "Exported %d TeX(s)" % len(self._json_diagrams)
-                self._message_type = "success"
-
+                self._msg("Exported %d TeX(s)" % len(self._json_diagrams), "success")
             elif fmt == "svg":
                 for i, d in enumerate(self._json_diagrams):
                     svg = compiler.export_svg(d)
-                    spath = "%s_%04d.svg" % (base, i + 1)
-                    with open(spath, "w", encoding="utf-8") as f:
+                    with open("%s_%04d.svg" % (base, i + 1), "w", encoding="utf-8") as f:
                         f.write(svg)
-                self._message = "Exported %d SVG(s)" % len(self._json_diagrams)
-                self._message_type = "success"
-
+                self._msg("Exported %d SVG(s)" % len(self._json_diagrams), "success")
             elif fmt == "pdf":
+                import subprocess
                 for i, d in enumerate(self._json_diagrams):
                     tex = compiler.export_tex(d)
                     tpath = "%s_%04d.tex" % (base, i + 1)
                     with open(tpath, "w", encoding="utf-8") as f:
                         f.write(tex)
-                    self._compile_pdf(tpath)
-                self._message = "Exported %d PDF(s)" % len(self._json_diagrams)
-                self._message_type = "success"
-
+                    workdir = os.path.dirname(tpath) or "."
+                    bname = os.path.basename(tpath)
+                    try:
+                        subprocess.run(["pdflatex", "-interaction=nonstopmode", bname],
+                                       cwd=workdir, capture_output=True, timeout=30)
+                        for ext in [".aux", ".log"]:
+                            af = os.path.splitext(tpath)[0] + ext
+                            if os.path.isfile(af):
+                                os.remove(af)
+                    except Exception:
+                        pass
+                self._msg("Exported %d PDF(s)" % len(self._json_diagrams), "success")
         except Exception as e:
-            self._message = "Export error: %s" % str(e)
-            self._message_type = "error"
+            self._msg("Export error: %s" % str(e), "error")
 
-    def _compile_pdf(self, tex_path):
-        import subprocess
-        workdir = os.path.dirname(tex_path) or "."
-        basename = os.path.basename(tex_path)
-        try:
-            subprocess.run(
-                ["pdflatex", "-interaction=nonstopmode", basename],
-                cwd=workdir, capture_output=True, timeout=30,
-            )
-            aux = os.path.splitext(tex_path)[0] + ".aux"
-            log = os.path.splitext(tex_path)[0] + ".log"
-            for f in [aux, log]:
-                if os.path.isfile(f):
-                    os.remove(f)
-        except Exception:
-            pass
+    def _do_save(self):
+        if self._filename:
+            with open(self._filename, "w", encoding="utf-8") as f:
+                f.write(self._file_content)
+            self._msg("Saved %s" % os.path.basename(self._filename), "success")
+
+    # ---- drawing ----
 
     def _draw(self):
         self._stdscr.erase()
         self._rrows, self._rcols = self._stdscr.getmaxyx()
-        self._draw_status_bar()
+        self._draw_bar()
         if self._mode == "editor":
             self._draw_editor()
         elif self._mode == "ir_viewer":
-            self._draw_text(self._ir_text, "LLVM IR Output")
+            self._draw_text(self._ir_text, "LLVM IR")
         elif self._mode == "diag_viewer":
             self._draw_text(self._diag_text, "Diagnostics")
         elif self._mode == "json_viewer":
-            json_str = ""
-            if self._json_diagrams:
-                json_str = json.dumps(self._json_diagrams[0], indent=2)
-            self._draw_text(json_str, "Diagram JSON (first)")
-        self._draw_help_bar()
+            js = json.dumps(self._json_diagrams[0], indent=2) if self._json_diagrams else "(empty)"
+            self._draw_text(js, "Diagram JSON")
+        self._draw_status()
         self._stdscr.refresh()
 
-    def _draw_status_bar(self):
-        bar = " FTDL Compiler v0.1 | Mode: %s" % self._mode.upper()
+    def _draw_bar(self):
+        vim_indicator = self._vim_mode.upper()
+        bar = " FTDL | %s" % vim_indicator
         if self._filename:
-            bar += " | File: %s" % os.path.basename(self._filename)
+            bar += " | %s" % os.path.basename(self._filename)
         bar = bar.ljust(self._rcols)
         self._stdscr.addstr(0, 0, bar, curses.color_pair(6))
 
@@ -307,39 +557,42 @@ class FTDLTUI(object):
             self._stdscr.addstr(1, 0, "  %s" % self._message[:self._rcols - 2], color)
             self._message = ""
 
+        if self._cmd_mode:
+            prefix = ":%s" if not self._cmd_line.startswith("/") else ""
+            display = "%s%s" % (prefix, self._cmd_line)
+            self._stdscr.addstr(1, 0, display[:self._rcols], curses.color_pair(7))
+
     def _draw_editor(self):
-        lines = self._file_content.split("\n") if self._file_content else [""]
+        lines = self._get_lines()
         total = max(len(lines), 1)
-        view_top = 3
-        view_height = max(1, self._rrows - 5)
+        view_top = 2
+        view_h = max(1, self._rrows - 4)
 
         if self._cursor_row < self._scroll_row:
             self._scroll_row = self._cursor_row
-        if self._cursor_row >= self._scroll_row + view_height:
-            self._scroll_row = self._cursor_row - view_height + 1
+        if self._cursor_row >= self._scroll_row + view_h:
+            self._scroll_row = self._cursor_row - view_h + 1
         if self._scroll_row < 0:
             self._scroll_row = 0
 
-        for i in range(view_height):
-            line_idx = self._scroll_row + i
-            if line_idx >= total:
+        for i in range(view_h):
+            li = self._scroll_row + i
+            if li >= total:
                 break
-            screen_row = view_top + i
-            line = lines[line_idx] if line_idx < len(lines) else ""
-            prefix = "%4d " % (line_idx + 1)
-            self._stdscr.addstr(screen_row, 0, prefix, curses.color_pair(4))
+            sr = view_top + i
+            line = lines[li]
+            prefix = "%4d " % (li + 1)
+            self._stdscr.addstr(sr, 0, prefix, curses.color_pair(4))
 
-            available = self._rcols - len(prefix)
-            display = line[:available]
-            if len(display) < available:
-                display = display + " " * (available - len(display))
-
+            avail = self._rcols - len(prefix)
+            disp = line[:avail]
+            if len(disp) < avail:
+                disp += " " * (avail - len(disp))
             attr = curses.A_NORMAL
-            if line_idx == self._cursor_row:
-                attr = curses.color_pair(6)
-
+            if li == self._cursor_row:
+                attr = curses.color_pair(6) if self._vim_mode != "insert" else curses.color_pair(8)
             try:
-                self._stdscr.addstr(screen_row, len(prefix), display, attr)
+                self._stdscr.addstr(sr, len(prefix), disp, attr)
             except curses.error:
                 pass
 
@@ -347,20 +600,27 @@ class FTDLTUI(object):
         if not text:
             self._stdscr.addstr(3, 2, "(empty)", curses.color_pair(4))
             return
-        lines = str(text).split("\n")
-        view_height = max(1, self._rrows - 5)
-        for i in range(min(view_height, len(lines))):
+        for i, line in enumerate(str(text).split("\n")):
+            if i >= self._rrows - 4:
+                break
             try:
-                self._stdscr.addstr(3 + i, 1, lines[i][:self._rcols - 2], curses.color_pair(5))
+                self._stdscr.addstr(3 + i, 1, line[:self._rcols - 2], curses.color_pair(5))
             except curses.error:
                 break
 
-    def _draw_help_bar(self):
-        bar = (" F1:Edit  F2:IR  F3:Diag  F4:JSON  F5:Compile  "
-               "F6:JSON  F7:TeX  F8:SVG  F9:PDF  F10:Quit ")
-        bar = bar.ljust(self._rcols)
+    def _draw_status(self):
+        if self._vim_mode == "normal":
+            keys = "F1:Edit F2:IR F3:Diag F4:JSON F5:Compile F6-9:Export F10:Quit"
+        else:
+            keys = "Esc:Normal  F1:Editor F5:Compile  F6-9:Export  F10:Quit"
+        bar = " %s :%swq i/a/o/O h/j/k/l w/b $0 gg/G dd yy p /search %s" % (
+            self._vim_mode.upper(),
+            "e file | " if self._mode == "editor" else "",
+            keys,
+        )
+        bar = bar[:self._rcols - 1]
         try:
-            self._stdscr.addstr(self._rrows - 1, 0, bar, curses.color_pair(6))
+            self._stdscr.addstr(self._rrows - 1, 0, bar.ljust(self._rcols), curses.color_pair(6))
         except curses.error:
             pass
 

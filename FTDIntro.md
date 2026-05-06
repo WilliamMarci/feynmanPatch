@@ -1,4 +1,4 @@
-# FTDL v0.1 — Feynman Diagram Language
+# FTDL v0.2 — Feynman Diagram Language
 
 ## 概览
 
@@ -170,14 +170,38 @@ e+(1) e-(2) > tchannelGamma[1,2,3,4] > e+(3) e-(4)
 
 ### 装饰器汇总
 
-| 装饰器 | 用途 | 适用对象 |
-|--------|------|----------|
-| `@fermi` | 费米子（画箭头） | particle |
-| `@boson` | 玻色子（波浪线） | particle |
-| `@core` | 自动匹配基础顶点 | vertex |
-| `@point` | 显式点顶点 | vertex |
-| `@blob` | 复合/loop 顶点（需定义体） | vertex |
-| `@tchannel` | T-道特殊顶点 | vertex |
+| 装饰器 | 用途 | 适用对象 | 线型 |
+|--------|------|----------|------|
+| `@fermi` | 费米子（画箭头） | particle | 直线 + 箭头 |
+| `@boson` | 矢量玻色子（W/Z/γ） | particle | 波浪线 |
+| `@higgs` | Higgs 标量粒子 | particle | 虚线 |
+| `@gluon` | 胶子 | particle | 圈线 (coil) |
+| `@ghost` | Faddeev-Popov 鬼场 | particle | 点线 |
+| `@core` | 自动匹配基础顶点 | vertex | — |
+| `@point` | 显式点顶点 | vertex | — |
+| `@blob` | 复合/loop 顶点（需定义体） | vertex | — |
+| `@tchannel` | T-道特殊顶点 | vertex | — |
+
+### 图组合规则 (v0.2 新增)
+
+- **`;`** 分隔独立费曼图。每个 `;` 块生成一张输出图。
+- **`,`** 在 `;` 块内将多个子过程连接到一张组合图中。
+- 共享粒子实例号（如 `z(3)` 在多个子过程中出现）创建通过内线传播子连接的多个顶点。
+- 不共享的粒子实例号成为组合图的外部腿。
+
+示例：s-道 Z → μμ
+```
+e+(1) e-(2) > z(3), z(3) > mu+(4) mu-(5)
+```
+两个顶点通过 `z(3)` 传播子连接。外部腿: e+(1), e-(2), mu+(4), mu-(5)。
+
+示例：tt~ 产生与衰变
+```
+g(1) g(2) > t(3) t~(4),
+  t(3) > w+(5) b(6),
+  t~(4) > w-(7) b~(8)
+```
+三子过程组合，顶点: gtt + wtb + w-tb，内线: t(3), t~(4)。
 
 ### 顶点体的语法
 

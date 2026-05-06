@@ -13,6 +13,7 @@ TOK_LBRACKET = "["
 TOK_RBRACKET = "]"
 TOK_LPAREN = "("
 TOK_RPAREN = ")"
+TOK_SEMI = ";"
 TOK_AT = "@"
 TOK_IMPORT = "IMPORT"
 TOK_PARTICLE = "PARTICLE"
@@ -26,6 +27,7 @@ KEYWORDS = {
 
 SINGLE_CHAR_TOKENS = {
     ",": TOK_COMMA,
+    ";": TOK_SEMI,
     "=": TOK_EQUALS,
     ">": TOK_GT,
     "{": TOK_LBRACE,

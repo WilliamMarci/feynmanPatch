@@ -15,9 +15,20 @@ class ASTNode(object):
 
 class Program(ASTNode):
 
-    def __init__(self, items):
+    def __init__(self, decls, diagrams):
         super(Program, self).__init__()
-        self.items = items
+        self.decls = decls
+        self.diagrams = diagrams
+        self.items = decls
+        for d in diagrams:
+            self.items.extend(d.stmts)
+
+
+class Diagram(ASTNode):
+
+    def __init__(self, stmts):
+        super(Diagram, self).__init__()
+        self.stmts = stmts
 
 
 class ImportStmt(ASTNode):
@@ -109,10 +120,3 @@ class CallExpr(ASTNode):
         super(CallExpr, self).__init__()
         self.name = name
         self.args = args
-
-
-class Arg(ASTNode):
-
-    def __init__(self, value):
-        super(Arg, self).__init__()
-        self.value = value

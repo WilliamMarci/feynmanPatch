@@ -1,15 +1,17 @@
 import core,
-particle u = {u, u~} @fermi,
-particle d = {d, d~} @fermi,
-particle g = {g} @boson,
-particle h = {h} @boson,
-particle b = {b, b~} @fermi,
-particle e = {e+, e-} @fermi,
-particle z = {z} @boson,
-vertex hbb [h, b, b~] @core,
-vertex gqq [g, q, q~] @core,
-vertex zll [z, l+, l-] @core,
-vertex qqg [q, q~, g] @core,
-h(1) > b(2) b~(3),
+import sm,
+h(1) > b(2) b~(3);
+e+(1) e-(2) > z(3);
+g(1) g(2) > u(3) u~(4);
+g(1) g(2) > d(3) d~(4);
+w+(1) > e+(2) ve(3);
+w+(1) > u(2) d~(3);
+t(1) > w+(2) b(3);
 e+(1) e-(2) > z(3),
-g(1) g(2) > q(3) q~(4)
+  z(3) > mu+(4) mu-(5);
+u(1) u~(2) > g(3),
+  g(3) > d(4) d~(5);
+g(1) g(2) > t(3) t~(4),
+  t(3) > w+(5) b(6),
+  t~(4) > w-(7) b~(8);
+h(1) > g(2) g(3)
