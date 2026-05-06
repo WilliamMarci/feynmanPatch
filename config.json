@@ -1,0 +1,37 @@
+{
+  "enabled": true,
+  "trigger": {
+    "on_display_diagrams": true
+  },
+  "output": {
+    "base_dir": "feynmanPatch/output",
+    "write_json": true,
+    "write_tex": true,
+    "write_svg": true,
+    "overwrite": true,
+    "one_file_per_diagram": true
+  },
+  "layout": {
+    "engine": "madgraph",
+    "optimize": false,
+    "normalize": true,
+    "canvas_width": 480,
+    "canvas_height": 320
+  },
+  "tex": {
+    "standalone": true,
+    "label_mode": "particle",
+    "show_diagram_id": true
+  },
+  "svg": {
+    "font_size": 14,
+    "stroke_width": 1.6,
+    "particle_label": true,
+    "vertex_radius": 2.2
+  },
+  "runtime": {
+    "fail_silently": true,
+    "debug": true
+  }
+}
+

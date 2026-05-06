@@ -25,4 +25,3 @@ Generated files are written to:
 
 - `feynmanPatch/output/...`
 
-# feynmanPatch
